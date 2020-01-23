@@ -1,0 +1,184 @@
+load "lapack"
+load "fflapack"
+
+/////////////////////////////////////////////////////
+// the test is the initial form of the potential used to see its evolution
+//The initial potential form
+//test = 1 => sin(3x) function
+//test = 2 => sin(3y) function
+//test = 3 => Gauss function
+//test = 4 => Modon
+real test = 3;
+real meshp = 64;
+real dt = 0.1;
+real endt = 76;
+bool testgrad = true; 
+
+//CHOOSE WHETHER TO INCLUDE THE LINEAR/NONLINEAR Terms
+real d0 = 1;
+real d1 = 1;
+
+// maximum value of solution ePhi/kBTe that is attained physically, 
+// after which the algorithm is stopped (Phi/kBTe<<1)
+real umax = 0.3;
+
+//Defining the limits of the simulation box
+real x0 = 0, x1 = 10, y0 = 0, y1 = 10;
+mesh Th;
+if (test == 1 || test ==2){
+   x1 = 0.5;
+   y1 = 0.5;
+   Th = square( meshp , meshp);
+}
+if (test == 3){
+    Th = square( meshp , meshp , [x0+(2*x1-x0)*x, y0+(2*y1-y0)*y] );
+}
+if( test == 4 || test == 5){
+	// mesh of [x0,2*x1]x[y0,2*y1] domain for Modon
+	real x0 = -10, x1 = 10, y0 = -10, y1 = 10;
+	Th = square(meshp, meshp, [x0+(x1-x0)*x, y0+(y1-y0)*y]);
+}
+plot(Th,wait=true);
+
+//Finite Element subspace defines the simulation properties
+//Periodic in the x and y axes
+fespace Vh( Th , P1 , periodic = [ [2,y],[4,y],[1,x],[3,x] ]); 
+
+// denifing the functions u0 and w0 in the finite element space defined by Vh
+Vh u0, w0;
+real Ampu0 = 0.00001;
+
+if (test == 1){
+ u0 = Ampu0*sin(3*pi*x);
+ w0 =  Ampu0*(1+9*pi^2)*sin(3*pi*x); //the 10 is coming from the definition of w0
+}
+
+if (test ==2){
+ u0 = Ampu0*sin(3*y);
+ w0 = Ampu0*10*sin(3*y); //the 10 is coming from the definition of w0
+}
+
+if (test == 3){
+	//partial derivative wrt x of Gaussian function centered at [5,5], sigmax=sigmay=2,   
+	Ampu0 = 0.25;
+	real sigmaphix = 2, sigmaphiy = 2;
+ 	u0 = -Ampu0*(x-x1)/(sigmaphix^2)*exp( -(x-x1)^2/(2*sigmaphix^2) 
+		 - (y-y1)^2/(2*sigmaphiy^2) ); 
+}
+
+if(test == 4){
+	load "gsl"
+	real tt = 2;
+	real aa = 2,cc= 10;
+	real gamma = 3.83170597020751, beta = aa*(1-1/cc), bga = beta^2/gamma^2;
+	Vh rr = sqrt(x^2+(y-tt*cc)^2);
+	Vh cost = x/rr;
+	Vh A = aa*cc/gslsfbesselK1(beta);
+	Vh B = aa*cc*(1+1/gamma^2);
+	Vh C = -(beta/gamma)^2*aa*cc/gslsfbesselJ1(gamma);
+	//plot(bb2,value=true,fill=true,wait=true);
+	Vh u01 = A*gslsfbesselK1(beta*rr/aa)*cost;
+	Vh u02 = B*rr*cost/aa+C*gslsfbesselJ1(gamma*rr/aa)*cost;
+	u0 = (rr>aa)?u01:u02;
+	plot(u0,value=true,fill=true,wait=true);
+}
+
+//finding an approximation to w0 = u0-del u0 for cases 3 or 4
+if (test == 3 || test == 4 ){
+  	Vh tt;
+  	varf a(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v));
+  	matrix K = a(Vh,Vh);
+  	varf b(u,v) = int2d(Th)(u*v);
+  	matrix M = b(Vh,Vh);
+  	tt[] = K*u0[];
+  	tt[] += M*u0[];
+  	w0[] =  M^-1*tt[];
+}
+
+//DEfining the average density profile n0//
+Vh K0, Ky, Kx;
+
+if (test == 1 || test == 2 || test==4 || test == 5){
+  //K = function of x only
+  K0 = 12*x;
+  // If the partial derivatives are known, it is better to write them 
+  // explicitly 
+   Ky = 0;
+   Kx = 12;
+}
+
+if (test==3){
+	real sigmaN0=64;
+  	Vh n0= 10^20.*exp(-((x-x1)^2+(y-y1)^2)/sigmaN0);
+ 	//plot(n0,value=true,fill=true, wait=true);
+ 	//%K = log(n_0/wci) where n_0 is  a function of x and y of 
+	//amplitude 10^19 and wci = 10^7
+   	real wci = 10^7;
+   	K0 = log(n0/wci);
+   	Ky = dy(K0); // first order derivative with respect to y
+   	Kx = dx(K0); // first order derivative with respect to x
+} 
+
+Vh u,v,uold,w,wold; 
+problem uuproblem(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v))
+ 					   + int2d(Th)(u*v)-int2d(Th)(w*v);
+problem hypo(w,v) = int2d(Th)(w*v/dt)-int2d(Th)(wold*v/dt)
+ 				  - int2d(Th)(d1*dy(u)*dx(w)*v) +int2d(Th)(d1*dx(u)*dy(w)*v) 
+ 				  - int2d(Th)(d0*Kx*dy(u)*v) + int2d(Th)(d0*Ky*dx(u)*v);
+
+wold = w0;
+u = u0;
+
+int nbtriangles=Th.nt;
+real maxnormgradw=0; // ||grad(w)|| on Omega
+real normgradw=0;    // ||grad(w)|| on each triangle T_i
+real normw=0;		 // ||w||+||grad(w)|| at time t
+real maxnormw=0;	 // max(||w||+||grad(w)||) over all t
+matrix M;
+string out= "Mesh Size = " + meshp + "\nTime Step = " + dt + "\n";
+
+for(real t=0;t<endt;t+=dt){	
+	hypo; 
+	uuproblem;
+	wold=w; 
+	plot(u,value=true,fill=true);
+	if(testgrad){
+		for (int i=0;i<nbtriangles;i++){ 
+			// For each i, w(x)=a_ix+b_iy+c_i
+			// and thus grad w = (a_i,b_i)	
+			real xp1= Th[i][0].x;
+			real xp2= Th[i][1].x;
+			real xp3= Th[i][2].x;
+			real yp1= Th[i][0].y;
+			real yp2= Th[i][1].y;
+			real yp3= Th[i][2].y;
+			real wp1=w(xp1, yp1); // Interpolation  
+			real wp2=w(xp2, yp2); // is happening  
+			real wp3=w(xp3, yp3); // here. 
+			M = [[xp1,yp1,1],[xp2,yp2,1],[xp3,yp3,1]];					
+			real[int] bb = [wp1,wp2,wp3];
+			real[int] xx = [0,0,0];	
+			set(M,solver=sparsesolver);
+			xx=M^-1 * bb;
+			normgradw=abs(xx[0])+abs(xx[1]);
+			if(normgradw > maxnormgradw){
+				maxnormgradw = normgradw;
+			}
+		}
+		normw = w[].linfty + abs(maxnormgradw); 
+		cout << t << " " << w[].max << " " << maxnormgradw << " " << normw  
+			 << endl;	
+		if(normw>maxnormw){
+			maxnormw = normw;
+		}
+		if(abs(t-0.002)<0.00000001 
+			|| abs(t-1)<0.000000001 
+			|| abs(t-25)<0.000000001
+			|| abs(t-50)<0.00000001
+			|| abs(t-75)<0.00000001){
+			out = out + "t = " + t + ": " + maxnormw + " \n"; 
+			plot(u,value=true,fill=true);		
+		}
+	}
+}
+cout << out;

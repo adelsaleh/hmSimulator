@@ -1,0 +1,131 @@
+/////////////////////////////////////////////////////
+//test = 1 => sin(3x) function
+//test = 2 => sin(3y) function
+//test = 3 => Gauss function
+//test = 4 => Modon function (not working, should check which bessel functions to use)
+real test = 1;
+
+// d0 = 1 if we want to include the linear term in PDE, otherwise d0 = 0. 
+// d1 = 1 if we want to include the nonlinear term in PDE, otherwise d1 = 0.
+real d0 = 1;
+real d1 = 1;
+
+// time step and endtime
+real dt=0.1;
+real endt = 1000;
+
+//number of mesh points per direction: test1 or test2 = 32, test3 or test 4 = 64.
+ real meshp = 32;
+
+//maximum value of solution u that is attained physically, after which the algorithm is stopped 
+real umax = 0.1;
+
+//outpout filenames
+// filename for storing the values of solution for different times at given point
+string tufilename = "tout.txt";
+// filename for storing the values of solution for all points at given time
+string pufilename = "pout.txt";
+real ptime = endt/2;
+real tpoint =  meshp* meshp/2;
+
+/////////////////////////////////////////////////////
+//setting the mesh
+
+if (test==1 || test==2){
+// mesh of [0,1]x[0,1] domain using 32 points in each direction
+mesh Th=square(meshp,meshp);
+real x1 = 0.5, y1=0.5;}
+
+if(test==3){
+// mesh of [x0,2*x1]x[y0,2*y1] domain for Gauss
+real x0 = 0, x1 = 10, y0 = 0, y1 = 10;
+mesh Th=square(meshp,meshp,[x0+(2*x1-x0)*x, y0+(2*y1-y0)*y]);}
+
+if(test==4){
+// mesh of [x0,2*x1]x[y0,2*y1] domain for Modon
+real x0 = -10, x1 = 10, y0 = -10, y1 = 10;
+mesh Th=square(meshp,meshp,[x0+(x1-x0)*x, y0+(y1-y0)*y]);}
+
+/////////////////////////////////////////////////////
+//periodic boundary conditions
+
+plot(Th,wait=true);
+fespace Vh(Th,P1,periodic=[[2,y],[4,y],[1,x],[3,x]]); 
+real epsi=0.000000000000000;
+ 
+
+/////////////////////////////////////////////////////
+//Different initial conditions u0, w0
+
+if (test==1){
+Vh u0= 0.00001*sin(3*x);
+Vh w0= 0.00001*10*sin(3*x);}
+
+if (test==2){
+Vh u0= 0.00001*sin(3*y);
+Vh w0= 0.00001*10*sin(3*y);}
+
+if(test==3){
+//partial derivative wrt x of Gaussian function centered at [0.5,0.5], sigmax=sigmay=2, ampphi = 10^-5 (refer to HM codes Gauss.m)
+//Gauss= 0.00001*exp(-0.125*((x-x1)^2+(y-y1)^2));
+Vh u0= -0.00001*0.25*(x-x1)*exp(-0.125*((x-x1)^2+(y-y1)^2));}
+
+/////////////////////////////////////////////////////
+//find an approximation to w0 = u0-del u0
+
+if (test==3 || test==4){
+Vh w0, tt;
+varf a(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v));
+matrix K = a(Vh,Vh);
+varf b(u,v) = int2d(Th)(u*v);
+matrix M = b(Vh,Vh);
+tt[] = K*u0[];
+tt[] += M*u0[];
+w0[] =  M^-1*tt[];}
+
+/////////////////////////////////////////////////////
+//define K0 and its derivatives
+
+if (test==3){
+//%Gauss n0= 10^20*exp(-((x-x1)^2+(y-y1)^2))/128;
+Vh n0= 100000000000000000000.*exp(-((x-x1)^2+(y-y1)^2)/64);
+//plot(n0,value=true,fill=true);
+//%K = log(n_0/wci) where n_0 is  a function of x and y of amplitude 10^19 and wci = 10^7 
+Vh K0 = log(0.0000001*n0);
+Vh Ky = dy(K0);
+Vh Kx = dx(K0);
+}
+else{
+//K = function of x only
+Vh K0 = 12*x;
+//Note: if the partial derivatives are known, then it is better to write them explicitly since otherwise there will be numerical errors
+Vh Ky = 0;
+Vh Kx = 12;}
+
+/////////////////////////////////////////////////////
+//define the variational formulation
+
+Vh u,v,uold,w,wold; 
+//problem uproblem(u0,v) = int2d(Th)((dx(u0)*dx(v) + dy(u0)*dy(v)))+int2d(Th)(u0*v)-int2d(Th)(w0*v);
+//uproblem;
+problem uuproblem(u,v) = int2d(Th)(d1*(dx(u)*dx(v) + dy(u)*dy(v)))+int2d(Th)(d1*u*v)-int2d(Th)(d1*w*v);
+problem hypo(w,v) = int2d(Th)(d1*w*v/dt)-int2d(Th)(d1*wold*v/dt)-int2d(Th)(d1*dy(u)*dx(w)*v) +int2d(Th)(d1*dx(u)*dy(w)*v) - int2d(Th)(d0*Kx*dy(u)*v) + int2d(Th)(d0*Ky*dx(u)*v);
+
+/////////////////////////////////////////////////////
+//Solve for different time steps
+
+wold=w0; 
+for(real t=0;t<endt;t+=dt){ 
+hypo; 
+uuproblem;
+wold=w;
+plot(u,value=true,fill=true);
+{
+
+};
+if (u[].max > umax){
+   cout << t<< endl;
+   break;
+}
+
+}
