@@ -1,0 +1,56 @@
+load "lapack"
+load "fflapack"
+load "gsl"
+
+real dt = 0.1;
+real endt = 76;
+real meshp = 64;
+real d0 = 1;
+real d1 = 1;
+bool plotmodon = false;
+real L = 100;
+real x0 = 0, x1 = L, y0 = 0, y1 = L;
+mesh Th = square(meshp, meshp, [x0+(x1-x0)*x, y0+(y1-y0)*y]);
+fespace Vh( Th , P1 ); 
+
+if(plotmodon){
+	int aa = 2, cc=6;
+	real gamma = 3.8317, beta = aa*(1-1/cc), bga = beta^2/gamma^2;
+	Vh A = aa*cc/gslsfbesselK1(beta);
+	Vh B = aa*cc*(1+1/gamma^2);
+	Vh C = -(beta/gamma)^2*aa*cc/gslsfbesselJ1(gamma);
+	for(real t=0;t<endt;t+=dt){	
+		Vh rr = sqrt(x^2+(y-t*cc)^2);
+		Vh cost = x/rr;
+		Vh u01 = A*gslsfbesselK1(beta*rr/aa)*cost;
+		Vh u02 = B*rr*cost/aa+C*gslsfbesselJ1(gamma*rr/aa)*cost;
+		Vh u0 = (rr>aa)?u01:u02;
+		plot(u0,value=true,fill=true,wait=false);
+	}
+} else {
+	Vh u0 = sin(pi/L*x)*sin(pi/L*y);
+	Vh w0 = -sin(pi/L*x)*sin(pi/L*y)*(pi^2/50+1);
+	plot(u0,value=true,fill=true,wait=true);
+   	Vh K0 = 12*x;
+   	Vh Ky = 0;
+   	Vh Kx = 12;
+	Vh u,v,uold,w,wold; 
+	problem uuproblem(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v))
+					   + int2d(Th)(u*v)-int2d(Th)(w*v)+ on(1,2,3,4, u = 0);
+	
+	problem hypo(w,v) = int2d(Th)(w*v/dt)-int2d(Th)(wold*v/dt)
+			  - int2d(Th)(d1*dy(u)*dx(w)*v) +int2d(Th)(d1*dx(u)*dy(w)*v) 
+			  - int2d(Th)(d0*Kx*dy(u)*v) + int2d(Th)(d0*Ky*dx(u)*v) 
+			  + on(1,2,3,4, w = 0);
+	
+	wold = w0;
+	u = u0;
+	for(real t=0;t<endt;t+=dt){	
+		hypo; 
+		uuproblem;
+		wold=w; 
+		plot(u,value=true,fill=true);
+	}
+}
+
+
