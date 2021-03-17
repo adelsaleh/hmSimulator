@@ -3,7 +3,7 @@ Hasegawa-Mima equation simulator based on the FreeFem++ software. Written by [Dr
 
 For more info on the existence of solutions to the Hasegawa-Mima equation download [this paper](https://www.researchgate.net/publication/321873738_Local_Existence_of_an_H_P3_Solution_to_the_Hasegawa-Mima_Plasma_Equation).
 
-For more info on the Modon check out this [report](https://adelsaleh.github.io/pdfs/HM.pdf).
+For more info on the Modon check out this [report](https://adelsaleh.github.io/pdfs/hm/HM.pdf).
 Please note that this report is not in final version and will be constantly updated.
 
 For more info on how to use FreeFem++ please visit [their website](https://freefem.org/).
