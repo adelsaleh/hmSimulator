@@ -1,0 +1,178 @@
+load "lapack"
+load "gsl"
+load "medit"
+load "fflapack"
+include "getARGV.idp"
+include "ffmatlib.idp"
+
+/////////////////////////////////////////////////////
+// the test is the initial form of the potential used to see its evolution
+//The initial potential form
+//test = 1 => sin(3x) function
+//test = 2 => sin(3y) function
+//test = 3 => Gauss function
+real test = getARGV("-test", 3);
+real meshp = getARGV("-mesh", 32);
+real dt = getARGV("-dt", 0.5);
+real endt = getARGV("-endt", 75);
+real niso = getARGV("-nbiso",100);
+int plt = getARGV("-plot",1);
+int testgrad = getARGV("-test--linfty",0); 
+real L = getARGV("-L", 1);
+int seed = getARGV("-seed",1); 
+real d0 = getARGV("-d0", 1);
+real d1 = getARGV("-d1", 1);
+real amp = getARGV("-d1", 1);
+int d = getARGV("-d", 2);
+int out = getARGV("-out", 0);       // set to 1 to save data
+real x0 = getARGV("-x0", -1);       
+real x1 = getARGV("-x1", 1);       
+real y0 = getARGV("-y0", -1);       
+real y1 = getARGV("-y1", 1);       
+
+real[int] colorhsv=[ // color hsv model
+        4./6., 1 , 0.5, // dark blue
+        4./6., 1 , 1, // blue
+        5./6., 1 , 1, // magenta
+        1, 1. , 1, // red
+        1, 0.5 , 1 // light red
+];
+
+
+// maximum value of solution ePhi/kBTe that is attained physically, 
+// after which the algorithm is stopped (Phi/kBTe<<1)
+real umax = 0.3;
+
+//Defining the limits of the simulation box
+mesh Th;
+if (test == 3){
+    //  Preferred values 
+    // x0 = 0; y0 = 0; x1 = 10; y1 = 10;
+    Th = square( meshp , meshp , [x0+(2*x1-x0)*x, y0+(2*y1-y0)*y] );
+} else {
+    // Preferred values 
+    // For tests 1 and 2: x0 = 0; y0 = 0; x1 = 0.5; y1 = 0.5;
+    Th = square(meshp, meshp, [x0+(x1-x0)*x, y0+(y1-y0)*y]);
+}
+
+// FE subspace, periodic in the x and y axes
+fespace Vh( Th , P1 , periodic = [ [2,y],[4,y],[1,x],[3,x] ]); 
+
+if(out==1){
+    savemesh(Th, "th.msh");
+    ffSaveVh(Th, Vh, "vh.txt");
+}
+
+// denifing the functions u0 and w0 in the finite element space defined by Vh
+Vh u0, w0;
+real Ampu0 = 0.00001;
+
+if (test == 1){
+ u0 = Ampu0*sin(3*pi*x);
+ w0 =  Ampu0*(1+9*pi^2)*sin(3*pi*x); //the 10 is coming from the definition of w0
+}
+
+if (test ==2){
+ u0 = Ampu0*sin(3*y);
+ w0 = Ampu0*10*sin(3*y); //the 10 is coming from the definition of w0
+}
+
+
+if (test == 3){
+	//partial derivative wrt x of Gaussian function centered at [5,5], sigmax=sigmay=2,   
+	Ampu0 = 0.25;
+	real sigmaphix = 2, sigmaphiy = 2;
+ 	u0 = -Ampu0*(x-x1)/(sigmaphix^2)*exp( -(x-x1)^2/(2*sigmaphix^2) 
+		 - (y-y1)^2/(2*sigmaphiy^2) ); 
+}
+
+if(test==4){
+    real tt = 0.1;
+	real aa = 0.01 , cc= 1.1;
+	real gamma = 3.83170597020751, beta = aa*(1-1/cc), bga = beta^2/gamma^2;
+	Vh rr = sqrt(x^2+(y-tt*cc)^2);
+	Vh cost = x/rr;
+	Vh A = aa*cc/gslsfbesselK1(beta);
+	Vh B = aa*cc*(1+1/gamma^2);
+	Vh C = -(beta/gamma)^2*aa*cc/gslsfbesselJ1(gamma);
+	//plot(bb2,value=true,fill=true,wait=true);
+	Vh u01 = A*gslsfbesselK1(beta*rr/aa)*cost;
+	Vh u02 = B*rr*cost/aa+C*gslsfbesselJ1(gamma*rr/aa)*cost;
+	u0 = (rr>aa)?u01:u02;
+}
+
+if( test == 5) {
+    randinit(seed);
+    real r1 = (randint31()%100) * randreal2();
+    real r2 = (randint31()%100) * randreal2(); 
+    real r3 = (randint31()%100) * randreal2();   
+    real r4 = (randint31()%100) * randreal2();  
+    cout << "Numbers are: (" + r1 + "," + r2 + "," + r3 + "," + r4 + ")\n";
+    int n1 = randint32()%3;
+    int n2 = randint32()%3;
+    int n3 = randint32()%3;
+    int n4 = randint32()%3;
+    cout << "Numbers are: (" + n1 + "," + n2 + "," + n3 + "," + n4 + ")\n";
+    u0 = r1*cos(n1*pi*x/L) + r2*sin(n2*pi*y/L) + r3*sin(n3*pi*x/L) + r4*cos(n4*pi*y/L);
+    w0 = -dxx(u0)-dxx(u0)+u0  ; 
+}
+
+//finding an approximation to w0 = u0-del u0 for cases 3 or 4
+if (test == 3 || test == 4 ){
+  	Vh tt;
+  	varf a(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v));
+  	matrix K = a(Vh,Vh);
+  	varf b(u,v) = int2d(Th)(u*v);
+  	matrix M = b(Vh,Vh);
+  	tt[] = K*u0[];
+  	tt[] += M*u0[];
+  	w0[] =  M^-1*tt[];
+}
+
+//DEfining the average density profile n0//
+Vh K0, Ky, Kx;
+if (test == 1 || test == 2 || test==4 || test == 5){
+   /* In this case particle density is function of x only and the traveling  
+    * wave should be in the y direction
+    */
+   K0 = 12*x;
+   Ky = 0;
+   Kx = 12;
+}
+if (test==3){
+	real sigmaN0=64;
+  	Vh n0= 10^20.*exp(-((x-x1)^2+(y-y1)^2)/sigmaN0);
+ 	//plot(n0,value=true,fill=true, wait=true);
+ 	//%K = log(n_0/wci) where n_0 is  a function of x and y of 
+	//amplitude 10^19 and wci = 10^7
+   	real wci = 10^7;
+   	K0 = log(n0/wci);
+   	Ky = dy(K0); // first order derivative with respect to y
+   	Kx = dx(K0); // first order derivative with respect to x
+} 
+
+Vh u,v,uold,w,wold; 
+problem uuproblem(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v))
+ 					   + int2d(Th)(u*v)-int2d(Th)(w*v);
+problem hypo(w,v) = int2d(Th)(w*v/dt)-int2d(Th)(wold*v/dt)
+ 				  - int2d(Th)(d1*dy(u)*dx(w)*v) + int2d(Th)(d1*dx(u)*dy(w)*v) 
+ 				  - int2d(Th)(d0*Kx*dy(u)*v) + int2d(Th)(d0*Ky*dx(u)*v);
+
+wold = amp * w0;
+u = amp * u0;
+plot(u,value=true,fill=true,nbiso=niso,wait=true);
+plot(wold,value=true,fill=true,nbiso=niso,wait=true);
+ 
+int i;
+for(real t=0;t<endt;t+=dt){	
+    hypo; 
+    uuproblem;
+    wold=w; 
+    if(out==1){
+        ffSaveData(u,  i + ".txt");
+        i++;
+    }
+    if(plt==1){
+        plot(w,value=true,fill=true, nbiso=niso, dim=d);
+    }
+}

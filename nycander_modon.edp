@@ -1,0 +1,111 @@
+load "lapack"
+load "fflapack"
+load "gsl"
+include "getARGV.idp"
+include "ffmatlib.idp"
+
+
+real dt = getARGV("-dt", 0.01);
+real endt = getARGV("-endt", 1.);
+int meshp = getARGV("-mesh", 64);
+int niso = getARGV("nbiso",100);
+int plotmodon = getARGV("-plot", 1);
+real L = getARGV("-L",10);
+real d0 = 1;
+real d1 = 1;
+real x0 = -L, x1 = L, y0 = -L+1, y1 = L+1;
+mesh Th = square(meshp, meshp, [x0+(x1-x0)*x, y0+(y1-y0)*y]);
+fespace Vh( Th , P1 ); 
+
+savemesh(Th,"plots/ny-modon.msh");
+
+ffSaveVh(Th,Vh,"plots/ny-modon.txt");
+
+real a = 2., c=6.;
+real gamma = 3.83170597020751, beta = a*(1-1/c), bga = beta^2/gamma^2;
+Vh A = a*c/gslsfbesselK1(beta);
+Vh B = a*c*(1+1/gamma^2);
+Vh C = -(beta/gamma)^2*a*c/gslsfbesselJ1(gamma);
+Vh r,cost,u01,u02,u0;
+
+
+real[int] colorhsv=[ // color hsv model
+        4./6., 1 , 0.5, // dark blue
+        4./6., 1 , 1, // blue
+        5./6., 1 , 1, // magenta
+        1, 1. , 1, // red
+        1, 0.5 , 1 // light red
+];
+
+
+int count =0;   
+if(plotmodon==1){
+	for(real t=0;t<endt;t+=dt){	
+		r = sqrt(x^2+(y-t*c)^2);
+		cost = x/r;
+		u01 = A*gslsfbesselK1(beta*r/a)*cost;
+		u02 = B*r*cost/a+C*gslsfbesselJ1(gamma*r/a)*cost;
+		u0 = (r>a)?u01:u02;
+        plot(u0, value=true,fill=1,hsv=colorhsv, nbiso=100);
+        ffSaveData(u0, "plots/ny-modon-plotted-"+ count);
+        count++;
+    }
+} else {
+	real t0 = 0;
+	r = sqrt(x^2+(y-t0*c)^2);
+	cost = x/r;
+	//plot(bb2,value=true,fill=true,wait=true);
+	u01 = A*gslsfbesselK1(beta*r/a)*cost;
+	u02 = B*r*cost/a+C*gslsfbesselJ1(gamma*r/a)*cost;
+	u0 = (r>a)?u01:u02;
+	plot(u0,value=true,fill=true,wait=true,nbiso=niso, cmm="Initial data u0");
+
+    /**
+     * Finding w0=-laplacian(u0)+u0
+     */
+  	Vh tt,w0;
+  	varf a(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v));
+  	matrix K = a(Vh,Vh);
+  	varf b(u,v) = int2d(Th)(u*v);
+  	matrix M = b(Vh,Vh);
+  	tt[] = K*u0[];
+  	tt[] += M*u0[];
+  	w0[] =  M^-1*tt[];
+
+    
+    /**
+     * Average density profile
+     * K = function of x only
+     * If the partial derivatives are known, it is better to write them  explicitly 
+     */
+    Vh K0, Ky, Kx;
+    K0 = 12*x;
+    Kx = 12;
+
+    /**
+     * Setting up the variational problem
+     */
+	Vh u,v,uold,w,wold; 
+	problem uuproblem(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v))
+					   + int2d(Th)(u*v)-int2d(Th)(w*v)+ on(1,2,3,4, u = 0);
+	
+	problem hypo(w,v) = int2d(Th)(w*v/dt)-int2d(Th)(wold*v/dt)
+			  - int2d(Th)(d1*dy(u)*dx(w)*v) +int2d(Th)(d1*dx(u)*dy(w)*v) 
+			  - int2d(Th)(d0*Kx*dy(u)*v) + int2d(Th)(d0*Ky*dx(u)*v) 
+			  + on(1,2,3,4, w = 0);
+	
+	wold = w0;
+	u = u0;
+
+	for(real t=0;t<endt;t+=dt){	
+        if(count%1==0){
+	        plot(u,value=true,fill=true,  nbiso=niso,cmm="t="+t);
+            ffSaveData(u, "plots/ny-modon-simulated-"+ count);
+        }
+        count++;
+		hypo; 
+		uuproblem;
+		wold=w; 
+	    plot(u,value=true,fill=true,  nbiso=niso,cmm="t="+t);
+	}
+}

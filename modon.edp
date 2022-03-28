@@ -1,56 +1,186 @@
 load "lapack"
 load "fflapack"
 load "gsl"
+include "ffmatlib.idp"
+include "getARGV.idp"
 
-real dt = 0.1;
-real endt = 76;
-real meshp = 64;
-real d0 = 1;
-real d1 = 1;
-bool plotmodon = false;
-real L = 100;
-real x0 = 0, x1 = L, y0 = 0, y1 = L;
+
+
+real k = getARGV("-k", 12.0);       // background particle density
+real c = getARGV("-c", 1.0);        // speed of the wave
+real L = getARGV("-L", 1.0);        // hight of the rectangle
+real W = getARGV("-W", 1.0);        // hight of the rectangle
+real dt = getARGV("-dt", 0.01);     // time step 
+int meshp = getARGV("-msh", 32);    // mesh size
+real endt = getARGV("-endt", 32.0); // end time
+int itr = getARGV("-itr", 8);       // # of iterations for newton method
+int lin = getARGV("-lin", 0);       // set to 0 to solve for non-linear inital data
+int plt = getARGV("-plt", 1);       // set to 0 to stop plotting 
+int d0 = getARGV("-d0", 1);         // set to 0 to exclude linear term 
+int d1 = getARGV("-d1", 1);         // set to 0 to exclude non-linear term
+int out = getARGV("-out", 0);       // set to 1 to save data
+int d = getARGV("-d", 2);           // choose 2d vs 3d plot
+real damp = getARGV("-damp", 1.0);    // damping of the initial data         
+int noise = getARGV("-noise", 1);
+
+/**
+ * Setting up the mesh and the finite element space
+ */
+real x0 = 0, x1 = L, y0 = 0, y1 = W;
 mesh Th = square(meshp, meshp, [x0+(x1-x0)*x, y0+(y1-y0)*y]);
-fespace Vh( Th , P1 ); 
+fespace Vh( Th , P1 , periodic = [ [2,y],[4,y],[1,x],[3,x] ]); 
 
-if(plotmodon){
-	int aa = 2, cc=6;
-	real gamma = 3.8317, beta = aa*(1-1/cc), bga = beta^2/gamma^2;
-	Vh A = aa*cc/gslsfbesselK1(beta);
-	Vh B = aa*cc*(1+1/gamma^2);
-	Vh C = -(beta/gamma)^2*aa*cc/gslsfbesselJ1(gamma);
-	for(real t=0;t<endt;t+=dt){	
-		Vh rr = sqrt(x^2+(y-t*cc)^2);
-		Vh cost = x/rr;
-		Vh u01 = A*gslsfbesselK1(beta*rr/aa)*cost;
-		Vh u02 = B*rr*cost/aa+C*gslsfbesselJ1(gamma*rr/aa)*cost;
-		Vh u0 = (rr>aa)?u01:u02;
-		plot(u0,value=true,fill=true,wait=false);
-	}
-} else {
-	Vh u0 = sin(pi/L*x)*sin(pi/L*y);
-	Vh w0 = -sin(pi/L*x)*sin(pi/L*y)*(pi^2/50+1);
-	plot(u0,value=true,fill=true,wait=true);
-   	Vh K0 = 12*x;
-   	Vh Ky = 0;
-   	Vh Kx = 12;
-	Vh u,v,uold,w,wold; 
-	problem uuproblem(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v))
-					   + int2d(Th)(u*v)-int2d(Th)(w*v)+ on(1,2,3,4, u = 0);
-	
-	problem hypo(w,v) = int2d(Th)(w*v/dt)-int2d(Th)(wold*v/dt)
-			  - int2d(Th)(d1*dy(u)*dx(w)*v) +int2d(Th)(d1*dx(u)*dy(w)*v) 
-			  - int2d(Th)(d0*Kx*dy(u)*v) + int2d(Th)(d0*Ky*dx(u)*v) 
-			  + on(1,2,3,4, w = 0);
-	
-	wold = w0;
-	u = u0;
-	for(real t=0;t<endt;t+=dt){	
-		hypo; 
-		uuproblem;
-		wold=w; 
-		plot(u,value=true,fill=true);
-	}
+if(out==1){ 
+    savemesh(Th, "travel-x3/th.msh");
+    ffSaveVh(Th, Vh, "travel-x3/vh.txt");
 }
 
 
+Vh u0, v, ulin;
+string s;
+if(lin==1){
+    int q = 0;
+} else {
+    s = "Simulating non-linear traveling wave"; 
+    Vh phik;
+    macro g(u) -u^2 // EOM
+    /**
+     * By solving the linear part of the semi-linear equation, suject to the desired boundary 
+     * conditions, we can  reduce the problem to H^1_0 
+     */
+    problem linear(phik,v) = int2d(Th)( dx(phik)*dx(v) + dy(phik)*dy(v) )
+				           + int2d(Th)(phik*v) + int2d(Th)(k*x*v);
+    linear;
+    if(plt==1){
+        plot(phik, nbiso=100, value=true,dim=d,fill=true,wait=true, cmm=s+": Solution of -delta(u)+u=-kx");
+    }
+
+    
+    Vh yold, ynew; // The previous and current iterations of the Newton Method 
+    yold = 0;      // The initial guess 
+     
+    /** 
+     * f is the non-linearity in the semi-linear equation with derivative df
+     * Note: the EOM word is not a comment! It's actually a "End of Macro" instead of 
+     *       the usual semi-column, which is unfortunate.   
+     *
+     */  
+
+    macro f(u)  -atan(u)    // EOM  
+    macro df(u) -1/(1+u^2)  // EOM
+    
+    /**
+     * Function f(u)=-u^2
+     * > good behavior L=4,5,8,10,12,14
+     * > bad behavior  L=2,3,6,9,11,13,15 
+     * > L=7: good behavior until iteration 8
+    **/
+    //macro f(u)  -u^2    // EOM      
+    //macro df(u) -2*u  // EOM                
+
+    /**
+     * Function f(u)=-u^3
+     * > good behavior L = 1
+     * > bad behavior  L = 2,3,4
+     * Comments: generally bad behaviour due to the probable presence of multiple solutions
+    **/
+    //macro f(u)  -u^3      // EOM      
+    //macro df(u) -3*u^2    // EOM                
+
+    plot(yold,value=true,fill=true,wait=true, dim=d, cmm = "n=0");
+    
+    /**
+     * We apply the Newton method on the functional J': H^1_P -> H^(-1)_P given by
+     *     J'(u)v= int(nabla(u)*nabla(v))+int(u*v)-int(f(u)*v).
+     * The iterative procedure is given by the following variational equation.
+     */
+    problem initialData(ynew, v) =  int2d(Th)( dx(ynew)*dx(v) + dy(ynew)*dy(v) )
+                                 +  int2d(Th)( (1-df(yold+phik+c*x)) * ynew * v )
+                                 -  int2d(Th)( (f(yold+phik+c*x)-df(yold+phik+c*x)*yold)*v );
+
+    Vh ploty;
+    for(int i=1; i<=itr; i++){
+        if(out==1){
+            ffSaveData(ploty, "travel-atan/newton" + i + ".txt");
+        }
+        initialData;
+        ploty = damp*(ynew+phik);
+        if(plt == 1){
+            plot(ploty, wait=true, dim=d, value=true, fill=true, cmm= "n=" + i ,nbiso=100);
+        }
+        yold=ynew;
+    }
+    u0 = ynew + phik;  
+}
+
+Vh u0p=u0;
+
+/**
+ * Get w0=(I-Delta)u0
+ */
+Vh tt,w0p;
+varf a(u,v) = int2d(Th)(dx(u)*dx(v) + dy(u)*dy(v));
+matrix K = a(Vh,Vh);
+varf b(u,v) = int2d(Th)(u*v);
+matrix M = b(Vh,Vh);
+tt[] = K*u0p[];
+tt[] += M*u0p[];
+w0p[] =  M^-1*tt[];
+
+if(plt==1){
+    plot(u0p,value=true,fill=true,wait=true,cmm=s + ": initial data u0", dim=d, nbiso=100);
+    plot(w0p,value=true,fill=true,wait=true,cmm=s + ": w0=-delta(u0)+u0", dim=d, nbiso=100);
+}
+
+
+Vh vp,u,w,wold; 
+problem uuproblem(u,vp) = int2d(Th)(dx(u)*dx(vp) + dy(u)*dy(vp))
+				        + int2d(Th)(u*vp)-int2d(Th)(w*vp);
+
+problem hypo(w,vp) = int2d(Th)(w*vp/dt)-int2d(Th)(wold*vp/dt)
+		           - int2d(Th)(d1*dy(u)*dx(vp)*w) 
+                   + int2d(Th)(d1*dx(u)*dy(vp)*w) 
+	               - int2d(Th)(d0*k*dy(u)*vp);
+
+
+wold = damp*w0p;
+u = damp*u0p;
+
+int i;
+int j;
+for(real tt=0; tt<=endt; tt+=dt){	
+	hypo; 
+	uuproblem;
+	wold=w; 
+    //if( 0 <= tt && tt<= 2.99 && ( 100*tt % 25 == 0.0 ) ){
+    //    i++;
+    //    if( out==1) {
+    //        ffSaveData(u, "plots-travel-newton/" + i + ".txt");
+    //    }
+    //}
+    if(0.1<= tt && tt< 0.1){
+	    real Ampu0 = 10;
+	    real sigmaphix = 0.04*L, sigmaphiy = 0.04*L;
+        Vh ex = Ampu0*(x-x1/2)/(sigmaphix^2)*exp( -(x-x1/2)^2/(2*sigmaphix^2) 
+		 - (y-y1/2)^2/(2*sigmaphiy^2) );
+	    plot(ex,value=true, fill=true, dim=d, cmm=s+ ": t="+ tt, wait=true, nbiso=100);
+        u=u+ex;
+	    plot(u,value=true, fill=true, dim=d, cmm=s+ ": t="+ tt + " noise added", wait=true,nbiso=100);
+    } 
+        
+    if(out==1){
+        if(i%3==0){
+            ffSaveData(u, "travel-x3/" + tt + ".txt");
+        }
+    }
+    i++;
+    //if(3.0 <= tt && tt<= 4.6){ 
+    //    j++;
+    //    if( out == 1){
+    //        ffSaveData(u, "travel-newton/" + j + ".txt");
+    //    }
+    //} 
+    if(plt == 1){
+	    plot(u,value=true, fill=true, dim=d, cmm=s+ ": t="+ tt, nbiso=100);
+    }
+}
