@@ -85,7 +85,7 @@ The simulation should be similar to the first figure above. This corresponds to 
   <img src="test2.gif"/>
 </div>
 
-Part of the goals of this simulation is to be able to replicate known results in the literature regarding stationary taveling waves of the HM equation. Refer to chapter 3 following MS thesis [[2]](#2) for a discussion of the problem.  It turns out that the initial data for which the corresponding solution is a stationary wave are in fact solutions to a semi-linear elliptic equation on the square. More precisely, 
+Part of the goals of this simulation is to be able to replicate known results in the literature regarding stationary taveling waves of the HM equation. Refer to third chapter of the following MS thesis [[2]](#2) for a discussion of the problem.  It turns out that the initial data for which the corresponding solution is a stationary wave are in fact solutions to a semi-linear elliptic equation on the square. More precisely, 
 the initial data solves the equation
 
 <p align="center">
