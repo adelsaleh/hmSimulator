@@ -4,7 +4,7 @@
 [Hasegawa-Mima](https://en.wikipedia.org/wiki/Hasegawa%E2%80%93Mima_equation) equation simulator based on the [FreeFem++](https://freefem.org/) finite element software. Written by [Sophie Moufawwad](https://www.researchgate.net/profile/Sophie_Moufawad2) and maintained by [Adel Saleh](https://github.com/adelsaleh).
 
 <div align="center" style="width:85%; height:auto;">
-  <img src="test1.gif"/>
+  <img src="rand.gif"/>
 </div>
 
 ---
